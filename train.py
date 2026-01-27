@@ -366,10 +366,22 @@ def load_tokenizer(config: Config, logger: logging.Logger):
 # DATASET LOADING AND PREPROCESSING
 # =============================================================================
 
-def format_text(example: Dict[str, Any], text_field: str) -> str:
-    """Extract text from example based on field name."""
+def format_text(example: Dict[str, Any], ds_config: dict) -> str:
+    """
+    Extract and format text from example based on dataset configuration.
+
+    Handles multiple formats:
+    - Chat messages (messages field)
+    - Reasoning/CoT (question + step-by-step answer)
+    - Simple text fields
+    """
+    text_field = ds_config.get("text_field", "text")
+    answer_field = ds_config.get("answer_field")
+    system_field = ds_config.get("system_field")
+    format_type = ds_config.get("format", "text")
+
+    # Handle chat/messages format
     if text_field == "messages" and "messages" in example:
-        # Handle chat format - concatenate all messages
         messages = example["messages"]
         if isinstance(messages, list):
             parts = []
@@ -378,8 +390,54 @@ def format_text(example: Dict[str, Any], text_field: str) -> str:
                 content = msg.get("content", "")
                 parts.append(f"<|{role}|>\n{content}")
             return "\n".join(parts) + "\n<|end|>"
-    elif text_field in example:
-        return str(example[text_field])
+
+    # Handle reasoning/chain-of-thought format
+    if format_type == "reasoning" and answer_field:
+        question = example.get(text_field, "")
+        answer = example.get(answer_field, "")
+
+        if not question or not answer:
+            return ""
+
+        # Build reasoning format with clear structure
+        parts = []
+
+        # Add system prompt if available
+        if system_field and system_field in example:
+            system = example[system_field]
+            if system:
+                parts.append(f"<|system|>\n{system}")
+
+        # Add the question/problem
+        parts.append(f"<|user|>\n{question}")
+
+        # Add the reasoning/answer with thinking markers
+        # This encourages the model to learn step-by-step reasoning
+        if "####" in str(answer):
+            # GSM8K style: reasoning #### final_answer
+            reasoning_part, final_answer = str(answer).rsplit("####", 1)
+            parts.append(f"<|assistant|>\n<think>\n{reasoning_part.strip()}\n</think>\n\nThe answer is: {final_answer.strip()}")
+        elif "\\boxed{" in str(answer):
+            # LaTeX boxed answer format
+            parts.append(f"<|assistant|>\n<think>\n{answer}\n</think>")
+        else:
+            # General reasoning response
+            parts.append(f"<|assistant|>\n{answer}")
+
+        parts.append("<|end|>")
+        return "\n".join(parts)
+
+    # Handle simple text field
+    if text_field in example:
+        text = str(example[text_field])
+
+        # If there's an answer field but not reasoning format, combine them
+        if answer_field and answer_field in example:
+            answer = str(example[answer_field])
+            return f"<|user|>\n{text}\n<|assistant|>\n{answer}\n<|end|>"
+
+        return text
+
     return ""
 
 
@@ -394,7 +452,6 @@ def load_streaming_dataset(
     ds_name = ds_config["name"]
     ds_subset = ds_config.get("config")
     ds_split = ds_config.get("split", "train")
-    text_field = ds_config.get("text_field", "text")
     max_samples = ds_config.get("max_samples", float("inf"))
 
     logger.info(f"Loading streaming dataset: {ds_name}")
@@ -414,7 +471,7 @@ def load_streaming_dataset(
             if count >= max_samples:
                 break
 
-            text = format_text(example, text_field)
+            text = format_text(example, ds_config)
             if not text or len(text.strip()) < 10:
                 continue
 
@@ -455,13 +512,13 @@ def load_and_prepare_datasets(
         ds_name = ds_config["name"]
         ds_subset = ds_config.get("config")
         ds_split = ds_config.get("split", "train")
-        text_field = ds_config.get("text_field", "text")
         weight = ds_config.get("weight", 1.0)
         streaming = ds_config.get("streaming", False)
         max_samples = ds_config.get("max_samples", 100000)
+        format_type = ds_config.get("format", "text")
 
         logger.info(f"Loading dataset: {ds_name} (config: {ds_subset}, split: {ds_split})")
-        logger.info(f"  Max samples: {max_samples}, weight: {weight}")
+        logger.info(f"  Max samples: {max_samples}, weight: {weight}, format: {format_type}")
 
         try:
             if streaming:
@@ -482,7 +539,7 @@ def load_and_prepare_datasets(
                     if count >= max_samples:
                         break
 
-                    text = format_text(example, text_field)
+                    text = format_text(example, ds_config)
                     if text and len(text.strip()) >= 10:
                         examples.append({"text": text})
                         count += 1
@@ -508,7 +565,7 @@ def load_and_prepare_datasets(
                     if i >= max_samples:
                         break
 
-                    text = format_text(example, text_field)
+                    text = format_text(example, ds_config)
                     if text and len(text.strip()) >= 10:
                         examples.append({"text": text})
 

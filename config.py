@@ -213,17 +213,18 @@ class DatasetConfig:
     """Configuration for training datasets."""
 
     # Datasets for pretraining from scratch
-    # For pretraining, we need large-scale text data
+    # Mix of general text, code, and REASONING datasets for "deep thinking"
     datasets: List[dict] = field(default_factory=lambda: [
+        # =========== GENERAL TEXT ===========
         {
-            # Large English text corpus
+            # High-quality English educational text
             "name": "HuggingFaceFW/fineweb-edu",
             "config": "sample-10BT",
             "split": "train",
             "text_field": "text",
-            "weight": 0.35,
+            "weight": 0.20,
             "streaming": True,
-            "max_samples": 1000000,  # Limit for manageable training
+            "max_samples": 500000,
         },
         {
             # German text corpus
@@ -231,39 +232,120 @@ class DatasetConfig:
             "config": "de",
             "split": "train",
             "text_field": "text",
-            "weight": 0.20,
+            "weight": 0.10,
             "streaming": True,
-            "max_samples": 500000,
+            "max_samples": 300000,
         },
+
+        # =========== CODE ===========
         {
-            # Code corpus (Python)
+            # Python code
             "name": "bigcode/the-stack-dedup",
             "config": "data/python",
             "split": "train",
             "text_field": "content",
-            "weight": 0.20,
+            "weight": 0.10,
             "streaming": True,
-            "max_samples": 500000,
+            "max_samples": 300000,
+        },
+
+        # =========== REASONING & CHAIN-OF-THOUGHT ===========
+        {
+            # Math word problems with step-by-step solutions
+            "name": "openai/gsm8k",
+            "config": "main",
+            "split": "train",
+            "text_field": "question",
+            "answer_field": "answer",
+            "format": "reasoning",  # Special format for CoT
+            "weight": 0.08,
+            "streaming": False,
+            "max_samples": 50000,
         },
         {
-            # Mathematical/reasoning data
-            "name": "open-web-math/open-web-math",
+            # MetaMath - mathematical reasoning with chain-of-thought
+            "name": "meta-math/MetaMathQA",
             "config": None,
             "split": "train",
-            "text_field": "text",
-            "weight": 0.15,
+            "text_field": "query",
+            "answer_field": "response",
+            "format": "reasoning",
+            "weight": 0.10,
             "streaming": True,
             "max_samples": 300000,
         },
         {
-            # Instruction/conversation data for reasoning
+            # OpenOrca - reasoning explanations from GPT-4
+            "name": "Open-Orca/OpenOrca",
+            "config": None,
+            "split": "train",
+            "text_field": "question",
+            "answer_field": "response",
+            "system_field": "system_prompt",
+            "format": "reasoning",
+            "weight": 0.12,
+            "streaming": True,
+            "max_samples": 400000,
+        },
+        {
+            # Platypus - STEM reasoning (science, math, logic)
+            "name": "garage-bAInd/Open-Platypus",
+            "config": None,
+            "split": "train",
+            "text_field": "instruction",
+            "answer_field": "output",
+            "format": "reasoning",
+            "weight": 0.08,
+            "streaming": False,
+            "max_samples": 50000,
+        },
+        {
+            # Orca-Math - math word problems with detailed solutions
+            "name": "microsoft/orca-math-word-problems-200k",
+            "config": None,
+            "split": "train",
+            "text_field": "question",
+            "answer_field": "answer",
+            "format": "reasoning",
+            "weight": 0.07,
+            "streaming": False,
+            "max_samples": 200000,
+        },
+        {
+            # Scientific reasoning and explanations
+            "name": "camel-ai/math",
+            "config": None,
+            "split": "train",
+            "text_field": "message_1",
+            "answer_field": "message_2",
+            "format": "reasoning",
+            "weight": 0.05,
+            "streaming": True,
+            "max_samples": 100000,
+        },
+
+        # =========== INSTRUCTION FOLLOWING ===========
+        {
+            # Multi-turn conversations with reasoning
             "name": "HuggingFaceH4/ultrachat_200k",
             "config": None,
             "split": "train_sft",
             "text_field": "messages",
-            "weight": 0.10,
+            "weight": 0.05,
             "streaming": False,
-            "max_samples": 200000,
+            "max_samples": 100000,
+        },
+        {
+            # German instructions and reasoning
+            "name": "LeoLM/OpenSchnabeltier",
+            "config": None,
+            "split": "train",
+            "text_field": "instruction",
+            "answer_field": "output",
+            "format": "reasoning",
+            "weight": 0.05,
+            "streaming": False,
+            "max_samples": 50000,
         },
     ])
 

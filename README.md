@@ -140,15 +140,50 @@ python train.py --no-push
 
 ## Datasets
 
-Training uses a mix of high-quality datasets:
+Training uses a carefully curated mix emphasizing **reasoning and chain-of-thought**:
 
+### General Text (30%)
 | Dataset | Content | Weight |
 |---------|---------|--------|
-| FineWeb-Edu | English educational text | 35% |
-| CulturaX (German) | German web text | 20% |
-| The Stack (Python) | Python source code | 20% |
-| OpenWebMath | Mathematical content | 15% |
-| UltraChat | Conversations/reasoning | 10% |
+| FineWeb-Edu | English educational text | 20% |
+| CulturaX (German) | German web text | 10% |
+
+### Code (10%)
+| Dataset | Content | Weight |
+|---------|---------|--------|
+| The Stack | Python source code | 10% |
+
+### Reasoning & Chain-of-Thought (50%)
+| Dataset | Content | Weight |
+|---------|---------|--------|
+| GSM8K | Math word problems with step-by-step solutions | 8% |
+| MetaMathQA | Mathematical reasoning with CoT | 10% |
+| OpenOrca | GPT-4 reasoning explanations | 12% |
+| Open-Platypus | STEM reasoning (science, math, logic) | 8% |
+| Orca-Math | Math problems with detailed solutions | 7% |
+| CAMEL-Math | Scientific/mathematical reasoning | 5% |
+
+### Instruction Following (10%)
+| Dataset | Content | Weight |
+|---------|---------|--------|
+| UltraChat | Multi-turn conversations | 5% |
+| OpenSchnabeltier | German instructions | 5% |
+
+### Reasoning Format
+Data is formatted with special tokens to encourage step-by-step thinking:
+```
+<|user|>
+What is 15% of 80?
+<|assistant|>
+<think>
+To find 15% of 80:
+Step 1: Convert 15% to decimal: 15/100 = 0.15
+Step 2: Multiply: 0.15 × 80 = 12
+</think>
+
+The answer is: 12
+<|end|>
+```
 
 Datasets are streamed and cached automatically on first run.
 
