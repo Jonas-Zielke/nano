@@ -7,11 +7,6 @@ accelerate>=0.25.0
 # Hugging Face Hub integration
 huggingface_hub>=0.20.0
 
-# Efficient training
-peft>=0.7.0
-bitsandbytes>=0.41.0
-trl>=0.7.0
-
 # Tokenization
 tokenizers>=0.15.0
 sentencepiece>=0.1.99
@@ -32,5 +27,6 @@ pyarrow>=14.0.0
 
 # Evaluation
 evaluate>=0.4.0
-sacrebleu>=2.4.0
-rouge_score>=0.1.2
+
+# Optional: Flash Attention 2 (uncomment if needed)
+# flash-attn>=2.0.0

@@ -1,15 +1,34 @@
-# Nano - ML Training Environment
+# Nano - Train a 1B Parameter LLM from Scratch
 
-A complete Python project for training a small (~1B parameter) multilingual language model with automatic checkpointing to Hugging Face Hub.
+A complete Python project for training a ~1 billion parameter language model **from scratch** (not fine-tuning) with automatic checkpointing to Hugging Face Hub.
 
 ## Features
 
-- **Multilingual Training**: Supports German and English language learning
-- **Code Generation**: Trained on code datasets for programming tasks
-- **Reasoning Capabilities**: Includes chain-of-thought and mathematical reasoning datasets
-- **Efficient Training**: Uses LoRA and 4-bit quantization for memory efficiency
-- **Automatic Checkpointing**: Uploads model checkpoints to Hugging Face after each epoch
-- **Resumable Training**: Can continue from the last checkpoint if interrupted
+- **Training from Scratch**: Randomly initialized weights, no pretrained model
+- **LLaMA-style Architecture**: Modern transformer with RoPE, RMSNorm, SwiGLU
+- **~1B Parameters**: Configurable model size (default: 1.1B parameters)
+- **Multilingual Training**: German and English text corpora
+- **Code Generation**: Python code from The Stack
+- **Reasoning Data**: Mathematical and instruction-following datasets
+- **Automatic Checkpointing**: Uploads to Hugging Face Hub during training
+- **Resumable Training**: Continue from any checkpoint
+
+## Model Architecture
+
+The model uses a LLaMA-style architecture:
+
+| Component | Configuration |
+|-----------|--------------|
+| Architecture | LLaMA (decoder-only transformer) |
+| Parameters | ~1.1 billion |
+| Hidden Size | 2048 |
+| Layers | 22 |
+| Attention Heads | 16 |
+| FFN Size | 5504 (SwiGLU) |
+| Context Length | 2048 tokens |
+| Vocabulary | 32,000 (LLaMA tokenizer) |
+| Position Encoding | RoPE |
+| Normalization | RMSNorm |
 
 ## Project Structure
 
@@ -17,8 +36,8 @@ A complete Python project for training a small (~1B parameter) multilingual lang
 nano/
 ├── setup.sh           # Environment setup script
 ├── requirements.txt   # Python dependencies
-├── config.py          # Configuration settings
-├── train.py           # Main training script
+├── config.py          # Model architecture & training config
+├── train.py           # Main pretraining script
 ├── README.md          # This file
 ├── models/            # Downloaded model files
 ├── datasets/          # Cached datasets
@@ -52,7 +71,7 @@ source venv/bin/activate
 ### 3. Configure Hugging Face Token
 
 ```bash
-# Set your Hugging Face token
+# Set your Hugging Face token (required for dataset access and uploads)
 export HF_TOKEN='your_huggingface_token_here'
 ```
 
@@ -64,30 +83,37 @@ python train.py
 
 ## Configuration
 
-All configuration options are in `config.py`. Key settings include:
+All configuration is in `config.py`. Key settings:
 
-### Model Configuration
+### Model Architecture
 
 ```python
-model_name_or_path = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"  # Base model
-use_lora = True          # Enable LoRA for efficient fine-tuning
-load_in_4bit = True      # 4-bit quantization for memory efficiency
+# ~1B parameter configuration
+vocab_size = 32000           # Vocabulary size
+hidden_size = 2048           # Hidden dimension
+intermediate_size = 5504     # FFN size (SwiGLU)
+num_hidden_layers = 22       # Transformer layers
+num_attention_heads = 16     # Attention heads
+max_position_embeddings = 2048  # Context length
 ```
 
 ### Training Configuration
 
 ```python
-num_train_epochs = 3                    # Number of epochs
-per_device_train_batch_size = 4         # Batch size per GPU
-gradient_accumulation_steps = 8         # Effective batch = 4 * 8 = 32
-learning_rate = 2e-5                    # Learning rate
+max_steps = 100000                    # Total training steps
+per_device_train_batch_size = 8       # Batch size per GPU
+gradient_accumulation_steps = 16      # Effective batch = 128
+learning_rate = 3e-4                  # Peak learning rate
+warmup_steps = 2000                   # Linear warmup steps
+weight_decay = 0.1                    # AdamW weight decay
 ```
 
 ### Hub Configuration
 
 ```python
-repo_id = "Kanonenbombe/nano"           # Destination repository
-push_to_hub = True                       # Enable automatic uploads
+repo_id = "Kanonenbombe/nano"         # Destination repository
+push_to_hub = True                     # Enable automatic uploads
+save_steps = 5000                      # Checkpoint every N steps
 ```
 
 ## Command Line Options
@@ -99,100 +125,104 @@ python train.py
 # Resume from checkpoint
 python train.py --resume
 
-# Override epochs
-python train.py --epochs 5
+# Override max steps
+python train.py --max-steps 50000
 
 # Override batch size
-python train.py --batch-size 8
+python train.py --batch-size 4
 
 # Override learning rate
-python train.py --learning-rate 1e-5
+python train.py --learning-rate 1e-4
 
-# Disable Hub uploads
+# Disable Hub uploads (train locally only)
 python train.py --no-push
 ```
 
 ## Datasets
 
-The training uses a combination of datasets:
+Training uses a mix of high-quality datasets:
 
-| Dataset | Purpose | Weight |
+| Dataset | Content | Weight |
 |---------|---------|--------|
-| HuggingFaceH4/ultrachat_200k | Multilingual conversations | 40% |
-| LeoLM/OpenSchnabeltier | German instructions | 20% |
-| bigcode/starcoderdata | Code generation | 20% |
-| gsm8k | Mathematical reasoning | 20% |
+| FineWeb-Edu | English educational text | 35% |
+| CulturaX (German) | German web text | 20% |
+| The Stack (Python) | Python source code | 20% |
+| OpenWebMath | Mathematical content | 15% |
+| UltraChat | Conversations/reasoning | 10% |
 
-Datasets are automatically downloaded and cached on first run.
-
-## Model Architecture
-
-- **Base Model**: TinyLlama-1.1B-Chat (1.1B parameters)
-- **Fine-tuning**: LoRA (Low-Rank Adaptation)
-- **Quantization**: 4-bit NF4 quantization with double quantization
-- **Attention**: Flash Attention 2 (if available)
+Datasets are streamed and cached automatically on first run.
 
 ## Hardware Requirements
 
-### Minimum
-- GPU: 8GB VRAM (RTX 3070, RTX 4070, etc.)
-- RAM: 16GB
-- Storage: 50GB for datasets and checkpoints
+### Minimum (with gradient checkpointing)
+- GPU: 24GB VRAM (RTX 3090, RTX 4090, A5000)
+- RAM: 32GB
+- Storage: 100GB for datasets and checkpoints
 
 ### Recommended
-- GPU: 16GB+ VRAM (RTX 4090, A100, etc.)
-- RAM: 32GB
-- Storage: 100GB SSD
+- GPU: 40GB+ VRAM (A100, H100) or multi-GPU
+- RAM: 64GB
+- Storage: 500GB SSD
 
-## Checkpointing
+### Multi-GPU Training
 
-Checkpoints are automatically saved and uploaded after each epoch:
+The script automatically uses all available GPUs via Hugging Face Accelerate:
 
-1. **Local Checkpoint**: Saved to `checkpoints/checkpoint-epoch-N/`
-2. **Hub Upload**: Pushed to `Kanonenbombe/nano`
-3. **Included Files**:
-   - Model weights (LoRA adapters)
-   - Tokenizer configuration
-   - Training state (epoch, loss, etc.)
-   - Dataset information
+```bash
+# For multi-GPU training
+accelerate launch train.py
+```
+
+## Training Progress
+
+Training is logged to TensorBoard:
+
+```bash
+# View training metrics
+tensorboard --logdir logs/tensorboard
+```
+
+Checkpoints are saved every 5,000 steps and uploaded to Hugging Face Hub.
+
+## Checkpointing & Resume
+
+### Automatic Checkpointing
+- Saves model weights every `save_steps` (default: 5000)
+- Uploads to Hugging Face Hub after each save
+- Keeps last 5 checkpoints locally
 
 ### Resume Training
 
-If training is interrupted:
-
 ```bash
-# Automatically finds and resumes from latest checkpoint
+# Automatically finds latest checkpoint
 python train.py --resume
 ```
 
-## Logging
+## Expected Training Time
 
-Training logs are saved to `logs/` and include:
+| Hardware | Steps/Hour | Time for 100K steps |
+|----------|------------|---------------------|
+| 1x RTX 4090 | ~50 | ~80 hours |
+| 1x A100 40GB | ~120 | ~35 hours |
+| 4x A100 40GB | ~400 | ~10 hours |
+| 8x H100 | ~1000 | ~4 hours |
 
-- Training metrics (loss, learning rate, etc.)
-- TensorBoard logs for visualization
-- Upload history for Hub checkpoints
-
-### View TensorBoard
-
-```bash
-tensorboard --logdir logs/tensorboard
-```
+*Estimates vary based on batch size and sequence length.*
 
 ## Troubleshooting
 
 ### Out of Memory (OOM)
 
-Reduce batch size or increase gradient accumulation:
+Reduce batch size or enable gradient checkpointing:
 
 ```bash
-python train.py --batch-size 2
+python train.py --batch-size 4
 ```
 
-Or edit `config.py`:
+Or in `config.py`:
 ```python
-per_device_train_batch_size = 2
-gradient_accumulation_steps = 16
+per_device_train_batch_size = 4
+gradient_checkpointing = True  # Already enabled by default
 ```
 
 ### Hub Upload Failures
@@ -200,15 +230,21 @@ gradient_accumulation_steps = 16
 Ensure your token has write access:
 
 ```bash
-# Test authentication
+huggingface-cli login
 huggingface-cli whoami
 ```
 
-### CUDA Not Available
+### Slow Dataset Loading
 
-Install PyTorch with CUDA support:
+Datasets are streamed - first run may be slow. Subsequent runs use cached data.
+
+### CUDA Version Issues
 
 ```bash
+# Check CUDA version
+nvidia-smi
+
+# Install matching PyTorch
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```
 
@@ -218,6 +254,6 @@ MIT License - See LICENSE file for details.
 
 ## Acknowledgments
 
-- [TinyLlama](https://github.com/jzhang38/TinyLlama) for the base model
-- [Hugging Face](https://huggingface.co) for transformers and datasets
-- [PEFT](https://github.com/huggingface/peft) for efficient fine-tuning
+- Architecture inspired by [LLaMA](https://arxiv.org/abs/2302.13971)
+- Training setup based on [Hugging Face Transformers](https://github.com/huggingface/transformers)
+- Datasets from [Hugging Face Hub](https://huggingface.co/datasets)
