@@ -205,3 +205,40 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# =============================================================================
+# ML Training Project Specific
+# =============================================================================
+
+# Model files and checkpoints (large files)
+models/*
+!models/.gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.h5
+
+# Dataset cache
+datasets/*
+!datasets/.gitkeep
+*.arrow
+*.parquet
+
+# Logs
+logs/*
+!logs/.gitkeep
+tensorboard/
+wandb/
+
+# Hugging Face cache
+.cache/
+huggingface/
+
+# Training artifacts
+runs/
+outputs/
+results/

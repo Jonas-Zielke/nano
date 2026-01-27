@@ -1,0 +1,2 @@
+# This directory stores training checkpoints
+# Files are gitignored to avoid committing large binaries
