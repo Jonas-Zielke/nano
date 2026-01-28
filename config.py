@@ -442,12 +442,12 @@ class TokenizerConfig:
     """Configuration for the tokenizer."""
 
     # Use a pretrained tokenizer (we train model from scratch, not tokenizer)
-    # LLaMA tokenizer is good for multilingual + code
-    tokenizer_name: str = "meta-llama/Llama-2-7b-hf"
+    # Using TinyLlama tokenizer - it's open (not gated) and Llama-compatible
+    tokenizer_name: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
-    # Alternative tokenizers:
-    # tokenizer_name: str = "mistralai/Mistral-7B-v0.1"
-    # tokenizer_name: str = "EleutherAI/gpt-neox-20b"
+    # Alternative open tokenizers:
+    # tokenizer_name: str = "EleutherAI/gpt-neox-20b"  # 50k vocab, good for code
+    # tokenizer_name: str = "Qwen/Qwen2.5-0.5B"  # Good multilingual support
 
     # Special tokens
     add_bos_token: bool = True
