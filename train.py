@@ -684,7 +684,7 @@ def tokenize_dataset(
     config: Config,
     logger: logging.Logger,
 ) -> Dataset:
-    """Tokenize the dataset for training."""
+    """Tokenize the dataset for training with fallback to single-process if multiprocessing fails."""
     logger.info("Tokenizing dataset...")
 
     def tokenize_function(examples):
@@ -696,15 +696,33 @@ def tokenize_dataset(
             return_tensors=None,
         )
 
-    tokenized_dataset = dataset.map(
-        tokenize_function,
-        batched=True,
-        remove_columns=["text"],
-        desc="Tokenizing",
-        num_proc=config.dataset.num_workers,
-    )
+    num_proc = config.dataset.num_workers
+
+    # Try multiprocessing first, fall back to single process if it fails
+    try:
+        logger.info(f"Attempting tokenization with {num_proc} processes...")
+        tokenized_dataset = dataset.map(
+            tokenize_function,
+            batched=True,
+            batch_size=1000,  # Process in larger batches for efficiency
+            remove_columns=["text"],
+            desc="Tokenizing",
+            num_proc=num_proc,
+        )
+    except (RuntimeError, Exception) as e:
+        logger.warning(f"Multiprocessing tokenization failed: {e}")
+        logger.info("Falling back to single-process tokenization...")
+        tokenized_dataset = dataset.map(
+            tokenize_function,
+            batched=True,
+            batch_size=1000,
+            remove_columns=["text"],
+            desc="Tokenizing (single process)",
+            num_proc=None,  # Single process
+        )
 
     # Filter out very short sequences
+    logger.info("Filtering short sequences...")
     tokenized_dataset = tokenized_dataset.filter(
         lambda x: len(x["input_ids"]) >= 32
     )
