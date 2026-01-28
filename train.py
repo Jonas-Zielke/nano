@@ -29,9 +29,11 @@ import logging
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Iterator
+from typing import Optional, Dict, Any, List, Iterator, Tuple
 import time
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 import torch
 import torch.nn as nn
@@ -504,85 +506,157 @@ def load_streaming_dataset(
         logger.warning(f"Failed to load dataset {ds_name}: {e}")
 
 
+def _load_single_dataset(
+    ds_config: dict,
+    cache_dir: str,
+    logger: logging.Logger,
+    progress_lock: threading.Lock,
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Load a single dataset. This function is designed to run in parallel.
+
+    Args:
+        ds_config: Dataset configuration dictionary
+        cache_dir: Directory to cache downloaded datasets
+        logger: Logger instance
+        progress_lock: Lock for thread-safe logging
+
+    Returns:
+        Tuple of (dataset_name, list of examples)
+    """
+    ds_name = ds_config["name"]
+    ds_subset = ds_config.get("config")
+    ds_split = ds_config.get("split", "train")
+    streaming = ds_config.get("streaming", False)
+    max_samples = ds_config.get("max_samples", 100000)
+
+    with progress_lock:
+        logger.info(f"Starting download: {ds_name} (config: {ds_subset}, split: {ds_split})")
+
+    examples = []
+
+    try:
+        if streaming:
+            # Load streaming dataset
+            dataset = load_dataset(
+                ds_name,
+                ds_subset,
+                split=ds_split,
+                streaming=True,
+                cache_dir=cache_dir,
+                trust_remote_code=True,
+            )
+
+            # Collect samples from streaming dataset
+            count = 0
+            for example in dataset:
+                if count >= max_samples:
+                    break
+
+                text = format_text(example, ds_config)
+                if text and len(text.strip()) >= 10:
+                    examples.append({"text": text})
+                    count += 1
+
+                # Log progress every 10000 samples
+                if count % 10000 == 0:
+                    with progress_lock:
+                        logger.info(f"  {ds_name}: loaded {count}/{max_samples} samples")
+        else:
+            # Load regular dataset with parallel download
+            dataset = load_dataset(
+                ds_name,
+                ds_subset,
+                split=ds_split,
+                cache_dir=cache_dir,
+                trust_remote_code=True,
+                num_proc=4,  # Parallel processing for non-streaming datasets
+            )
+
+            # Process samples
+            for i, example in enumerate(dataset):
+                if i >= max_samples:
+                    break
+
+                text = format_text(example, ds_config)
+                if text and len(text.strip()) >= 10:
+                    examples.append({"text": text})
+
+        with progress_lock:
+            logger.info(f"Completed: {ds_name} - loaded {len(examples)} examples")
+
+    except Exception as e:
+        with progress_lock:
+            logger.warning(f"Failed to load dataset {ds_name}: {e}")
+
+    return ds_name, examples
+
+
 def load_and_prepare_datasets(
     config: Config,
     tokenizer,
     logger: logging.Logger,
+    max_workers: int = 4,
 ) -> Dataset:
-    """Load, preprocess, and combine all datasets."""
-    logger.info("Loading datasets for pretraining...")
+    """
+    Load, preprocess, and combine all datasets using parallel downloading.
 
-    all_examples = []
+    This function downloads multiple datasets concurrently to significantly
+    reduce the total time required for data preparation.
+
+    Args:
+        config: Configuration object
+        tokenizer: Tokenizer instance (unused but kept for API compatibility)
+        logger: Logger instance
+        max_workers: Maximum number of parallel download workers (default: 4)
+
+    Returns:
+        Combined Dataset ready for tokenization
+    """
+    logger.info("=" * 60)
+    logger.info("PARALLEL DATASET LOADING")
+    logger.info("=" * 60)
+    logger.info(f"Loading {len(config.dataset.datasets)} datasets with {max_workers} parallel workers...")
+
     dataset_configs = config.dataset.datasets
+    all_examples = []
+    progress_lock = threading.Lock()
 
-    for ds_config in dataset_configs:
-        ds_name = ds_config["name"]
-        ds_subset = ds_config.get("config")
-        ds_split = ds_config.get("split", "train")
-        weight = ds_config.get("weight", 1.0)
-        streaming = ds_config.get("streaming", False)
-        max_samples = ds_config.get("max_samples", 100000)
-        format_type = ds_config.get("format", "text")
+    start_time = time.time()
 
-        logger.info(f"Loading dataset: {ds_name} (config: {ds_subset}, split: {ds_split})")
-        logger.info(f"  Max samples: {max_samples}, weight: {weight}, format: {format_type}")
+    # Use ThreadPoolExecutor for parallel downloads
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all dataset loading tasks
+        future_to_ds = {
+            executor.submit(
+                _load_single_dataset,
+                ds_config,
+                config.dataset.cache_dir,
+                logger,
+                progress_lock,
+            ): ds_config["name"]
+            for ds_config in dataset_configs
+        }
 
-        try:
-            if streaming:
-                # Load streaming dataset
-                dataset = load_dataset(
-                    ds_name,
-                    ds_subset,
-                    split=ds_split,
-                    streaming=True,
-                    cache_dir=config.dataset.cache_dir,
-                    trust_remote_code=True,
-                )
+        # Collect results as they complete
+        completed = 0
+        for future in as_completed(future_to_ds):
+            ds_name = future_to_ds[future]
+            completed += 1
 
-                # Collect samples
-                examples = []
-                count = 0
-                for example in tqdm(dataset, desc=f"Loading {ds_name}", total=max_samples):
-                    if count >= max_samples:
-                        break
-
-                    text = format_text(example, ds_config)
-                    if text and len(text.strip()) >= 10:
-                        examples.append({"text": text})
-                        count += 1
-
+            try:
+                _, examples = future.result()
                 if examples:
-                    ds = Dataset.from_list(examples)
-                    logger.info(f"  Loaded {len(ds)} examples from {ds_name}")
                     all_examples.extend(examples)
+                    logger.info(
+                        f"[{completed}/{len(dataset_configs)}] Added {len(examples)} examples from {ds_name}"
+                    )
+                else:
+                    logger.warning(f"[{completed}/{len(dataset_configs)}] No examples from {ds_name}")
+            except Exception as e:
+                logger.error(f"[{completed}/{len(dataset_configs)}] Error processing {ds_name}: {e}")
 
-            else:
-                # Load regular dataset
-                dataset = load_dataset(
-                    ds_name,
-                    ds_subset,
-                    split=ds_split,
-                    cache_dir=config.dataset.cache_dir,
-                    trust_remote_code=True,
-                )
-
-                # Process samples
-                examples = []
-                for i, example in enumerate(tqdm(dataset, desc=f"Processing {ds_name}")):
-                    if i >= max_samples:
-                        break
-
-                    text = format_text(example, ds_config)
-                    if text and len(text.strip()) >= 10:
-                        examples.append({"text": text})
-
-                if examples:
-                    logger.info(f"  Loaded {len(examples)} examples from {ds_name}")
-                    all_examples.extend(examples)
-
-        except Exception as e:
-            logger.warning(f"Failed to load dataset {ds_name}: {e}")
-            continue
+    elapsed_time = time.time() - start_time
 
     if not all_examples:
         raise ValueError("No datasets were loaded successfully!")
@@ -594,7 +668,12 @@ def load_and_prepare_datasets(
     # Shuffle
     combined_dataset = combined_dataset.shuffle(seed=config.dataset.seed)
 
-    logger.info(f"Total combined dataset size: {len(combined_dataset)} examples")
+    logger.info("=" * 60)
+    logger.info(f"DATASET LOADING COMPLETED")
+    logger.info(f"  Total examples: {len(combined_dataset)}")
+    logger.info(f"  Total time: {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)")
+    logger.info(f"  Throughput: {len(combined_dataset)/elapsed_time:.0f} examples/second")
+    logger.info("=" * 60)
 
     return combined_dataset
 

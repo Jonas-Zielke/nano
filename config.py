@@ -567,19 +567,6 @@ class DatasetConfig:
             "streaming": False,
             "max_samples": 200000,
         },
-        {
-            # Scientific reasoning and explanations
-            "name": "camel-ai/math",
-            "config": None,
-            "split": "train",
-            "text_field": "message_1",
-            "answer_field": "message_2",
-            "format": "reasoning",
-            "weight": 0.05,
-            "streaming": True,
-            "max_samples": 100000,
-        },
-
         # =========== INSTRUCTION FOLLOWING ===========
         {
             # Multi-turn conversations with reasoning
