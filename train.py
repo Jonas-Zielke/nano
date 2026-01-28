@@ -53,7 +53,14 @@ from datasets import load_dataset, Dataset, concatenate_datasets, IterableDatase
 from huggingface_hub import HfApi, login, upload_folder
 from tqdm import tqdm
 
-from config import get_config, print_config, Config
+from config import (
+    get_config,
+    get_config_for_vram,
+    print_config,
+    Config,
+    GPUMemoryMode,
+    print_memory_modes_summary,
+)
 
 # =============================================================================
 # LOGGING SETUP
@@ -634,7 +641,14 @@ def tokenize_dataset(
 
 def get_training_arguments(config: Config) -> TrainingArguments:
     """Create training arguments from configuration."""
-    return TrainingArguments(
+    # Determine optimizer based on memory configuration
+    optim = config.training.optim
+    if config.memory and config.memory.use_8bit_optimizer:
+        # Use 8-bit AdamW from bitsandbytes for memory efficiency
+        optim = "adamw_bnb_8bit"
+
+    # Build training arguments
+    training_args = TrainingArguments(
         output_dir=config.training.output_dir,
         num_train_epochs=config.training.num_train_epochs,
         max_steps=config.training.max_steps,
@@ -645,13 +659,14 @@ def get_training_arguments(config: Config) -> TrainingArguments:
         weight_decay=config.training.weight_decay,
         warmup_steps=config.training.warmup_steps,
         lr_scheduler_type=config.training.lr_scheduler_type,
-        optim=config.training.optim,
+        optim=optim,
         adam_beta1=config.training.adam_beta1,
         adam_beta2=config.training.adam_beta2,
         adam_epsilon=config.training.adam_epsilon,
         max_grad_norm=config.training.max_grad_norm,
         fp16=config.training.fp16,
         bf16=config.training.bf16,
+        tf32=config.memory.tf32 if config.memory else True,
         gradient_checkpointing=config.training.gradient_checkpointing,
         logging_steps=config.training.logging_steps,
         save_strategy=config.training.save_strategy,
@@ -663,6 +678,7 @@ def get_training_arguments(config: Config) -> TrainingArguments:
         dataloader_num_workers=config.training.dataloader_num_workers,
         dataloader_pin_memory=config.training.dataloader_pin_memory,
         dataloader_drop_last=config.training.dataloader_drop_last,
+        dataloader_prefetch_factor=config.memory.dataloader_prefetch_factor if config.memory else 2,
         report_to=config.logging.report_to,
         logging_dir=config.logging.tensorboard_log_dir,
         push_to_hub=False,  # We handle this manually via callback
@@ -670,6 +686,8 @@ def get_training_arguments(config: Config) -> TrainingArguments:
         hub_token=config.huggingface.token,
         remove_unused_columns=True,
     )
+
+    return training_args
 
 
 def find_resume_checkpoint(config: Config, logger: logging.Logger) -> Optional[str]:
@@ -848,6 +866,24 @@ def parse_args():
         action="store_true",
         help="Disable pushing to Hugging Face Hub",
     )
+    parser.add_argument(
+        "--memory-mode",
+        type=str,
+        choices=["low", "medium", "high", "auto"],
+        default=None,
+        help=(
+            "GPU memory mode: "
+            "'low' for 16GB GPU + 64GB RAM, "
+            "'medium' for 46GB GPU, "
+            "'high' for 80GB GPU, "
+            "'auto' to detect based on available VRAM"
+        ),
+    )
+    parser.add_argument(
+        "--show-memory-modes",
+        action="store_true",
+        help="Show available GPU memory modes and exit",
+    )
 
     return parser.parse_args()
 
@@ -856,10 +892,34 @@ def main():
     """Main entry point."""
     args = parse_args()
 
-    # Load configuration
-    config = get_config()
+    # Handle --show-memory-modes flag
+    if args.show_memory_modes:
+        print_memory_modes_summary()
+        sys.exit(0)
 
-    # Apply command line overrides
+    # Load configuration with optional memory mode
+    if args.memory_mode == "auto":
+        # Auto-detect based on available VRAM
+        if torch.cuda.is_available():
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"Detected GPU VRAM: {vram_gb:.1f} GB")
+            config = get_config_for_vram(int(vram_gb))
+        else:
+            print("No GPU detected. Using LOW_VRAM mode with CPU offloading.")
+            config = get_config(memory_mode=GPUMemoryMode.LOW_VRAM)
+    elif args.memory_mode:
+        # Map string to enum
+        mode_map = {
+            "low": GPUMemoryMode.LOW_VRAM,
+            "medium": GPUMemoryMode.MEDIUM_VRAM,
+            "high": GPUMemoryMode.HIGH_VRAM,
+        }
+        config = get_config(memory_mode=mode_map[args.memory_mode])
+    else:
+        # Default configuration (no memory mode applied)
+        config = get_config()
+
+    # Apply command line overrides (after memory mode to allow fine-tuning)
     if args.max_steps:
         config.training.max_steps = args.max_steps
     if args.batch_size:

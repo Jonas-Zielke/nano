@@ -208,6 +208,81 @@ The script automatically uses all available GPUs via Hugging Face Accelerate:
 accelerate launch train.py
 ```
 
+## GPU Memory Modes
+
+Three memory modes are available to optimize training for different hardware:
+
+### Low VRAM Mode (16 GB GPU + 64 GB RAM)
+For consumer GPUs like RTX 4080/4090 or cloud instances with limited VRAM:
+
+```bash
+python train.py --memory-mode low
+```
+
+Optimizations:
+- Batch size: 1 (with gradient accumulation 128)
+- 8-bit AdamW optimizer (reduces optimizer memory by ~50%)
+- CPU offloading for optimizer states
+- Grouped Query Attention (4 KV heads instead of 16)
+- Gradient checkpointing enabled
+
+### Medium VRAM Mode (46 GB GPU)
+For professional GPUs like A6000, L40S, or similar:
+
+```bash
+python train.py --memory-mode medium
+```
+
+Optimizations:
+- Batch size: 4 (with gradient accumulation 32)
+- Standard AdamW optimizer
+- Grouped Query Attention (8 KV heads)
+- Gradient checkpointing enabled
+
+### High VRAM Mode (80 GB GPU)
+For datacenter GPUs like A100 or H100:
+
+```bash
+python train.py --memory-mode high
+```
+
+Settings:
+- Batch size: 16 (with gradient accumulation 8)
+- Standard AdamW optimizer
+- Full attention (16 KV heads)
+- Gradient checkpointing **disabled** for maximum speed
+
+### Auto-Detection
+
+Let the script automatically select the appropriate mode based on your GPU:
+
+```bash
+python train.py --memory-mode auto
+```
+
+### View All Modes
+
+```bash
+# Show detailed comparison of all memory modes
+python train.py --show-memory-modes
+
+# Or directly via config
+python config.py summary
+```
+
+### Memory Mode Comparison
+
+| Setting | Low (16GB) | Medium (46GB) | High (80GB) |
+|---------|------------|---------------|-------------|
+| Batch Size | 1 | 4 | 16 |
+| Grad Accumulation | 128 | 32 | 8 |
+| Effective Batch | 128 | 128 | 128 |
+| Grad Checkpointing | Yes | Yes | No |
+| 8-bit Optimizer | Yes | No | No |
+| CPU Offload | Yes | No | No |
+| KV Heads (GQA) | 4 | 8 | 16 |
+| Est. VRAM Usage | ~14-15 GB | ~38-42 GB | ~60-70 GB |
+
 ## Training Progress
 
 Training is logged to TensorBoard:
