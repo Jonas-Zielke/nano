@@ -12,6 +12,262 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional, List
 from pathlib import Path
+from enum import Enum
+
+
+# =============================================================================
+# GPU MEMORY MODES
+# =============================================================================
+
+class GPUMemoryMode(Enum):
+    """
+    GPU memory modes for different hardware configurations.
+
+    LOW_VRAM:    16 GB GPU + 64 GB RAM - Aggressive memory optimization
+    MEDIUM_VRAM: 46 GB GPU (A6000, etc.) - Balanced performance
+    HIGH_VRAM:   80 GB GPU (A100, H100) - Maximum throughput
+    """
+    LOW_VRAM = "low_vram"
+    MEDIUM_VRAM = "medium_vram"
+    HIGH_VRAM = "high_vram"
+
+
+@dataclass
+class MemoryConfig:
+    """
+    Memory-specific configuration for different GPU setups.
+
+    This dataclass contains all settings that affect VRAM usage and
+    can be tuned based on available hardware.
+    """
+
+    # Batch size settings
+    per_device_train_batch_size: int = 8
+    per_device_eval_batch_size: int = 8
+    gradient_accumulation_steps: int = 16
+
+    # Memory optimization flags
+    gradient_checkpointing: bool = True
+
+    # CPU offloading (requires DeepSpeed or FSDP)
+    cpu_offload_optimizer: bool = False
+    cpu_offload_params: bool = False
+
+    # 8-bit optimizer (requires bitsandbytes)
+    use_8bit_optimizer: bool = False
+
+    # Precision settings
+    fp16: bool = False
+    bf16: bool = True
+    tf32: bool = True  # Enable TF32 on Ampere+ GPUs
+
+    # DataLoader optimization
+    dataloader_num_workers: int = 4
+    dataloader_pin_memory: bool = True
+    dataloader_prefetch_factor: int = 2
+
+    # Model parallelism (for multi-GPU)
+    use_fsdp: bool = False
+    fsdp_sharding_strategy: str = "FULL_SHARD"
+
+    # Flash Attention
+    use_flash_attention_2: bool = True
+
+    # Grouped Query Attention (reduce KV cache memory)
+    num_key_value_heads: int = 16  # Set lower (4, 8) to save memory
+
+    # Sequence length (can reduce to save memory)
+    max_seq_length: int = 2048
+
+    # Description for logging
+    mode_description: str = ""
+
+
+# =============================================================================
+# GPU MEMORY MODE PRESETS
+# =============================================================================
+
+def get_low_vram_config() -> MemoryConfig:
+    """
+    Configuration for 16 GB GPU + 64 GB RAM.
+
+    Optimizations:
+    - Minimal batch size (1) to fit in 16GB VRAM
+    - High gradient accumulation (128) to maintain effective batch size
+    - CPU offloading enabled for optimizer states
+    - 8-bit AdamW optimizer to reduce memory by ~50%
+    - Gradient checkpointing enabled (recompute activations)
+    - Reduced KV heads (GQA) to save memory
+    - Flash Attention 2 required
+
+    Expected VRAM usage: ~14-15 GB
+    Expected RAM usage: ~40-50 GB (optimizer states offloaded)
+    """
+    return MemoryConfig(
+        # Minimal batch size - fits ~1.1B model in 16GB
+        per_device_train_batch_size=1,
+        per_device_eval_batch_size=1,
+        gradient_accumulation_steps=128,  # Effective batch = 128
+
+        # Essential memory optimizations
+        gradient_checkpointing=True,
+
+        # CPU offloading - moves optimizer states to RAM
+        cpu_offload_optimizer=True,
+        cpu_offload_params=False,  # Keep params on GPU for speed
+
+        # 8-bit optimizer - halves optimizer memory
+        use_8bit_optimizer=True,
+
+        # Precision - bf16 is most memory efficient
+        fp16=False,
+        bf16=True,
+        tf32=True,
+
+        # Fewer workers to save system memory
+        dataloader_num_workers=2,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=2,
+
+        # No FSDP needed for single GPU
+        use_fsdp=False,
+        fsdp_sharding_strategy="FULL_SHARD",
+
+        # Flash Attention required for memory efficiency
+        use_flash_attention_2=True,
+
+        # Grouped Query Attention - 4 KV heads saves ~25% attention memory
+        num_key_value_heads=4,
+
+        # Full sequence length supported with these optimizations
+        max_seq_length=2048,
+
+        mode_description="Low VRAM Mode (16GB GPU + 64GB RAM): Aggressive memory optimization with CPU offloading"
+    )
+
+
+def get_medium_vram_config() -> MemoryConfig:
+    """
+    Configuration for 46 GB GPU (A6000, L40S, etc.).
+
+    Optimizations:
+    - Moderate batch size (4) for good GPU utilization
+    - Balanced gradient accumulation (32)
+    - Gradient checkpointing still enabled for safety margin
+    - No CPU offloading needed
+    - Standard optimizer (no 8-bit)
+    - 8 KV heads for slight memory saving
+
+    Expected VRAM usage: ~38-42 GB
+    """
+    return MemoryConfig(
+        # Moderate batch size - good GPU utilization
+        per_device_train_batch_size=4,
+        per_device_eval_batch_size=4,
+        gradient_accumulation_steps=32,  # Effective batch = 128
+
+        # Gradient checkpointing still helpful
+        gradient_checkpointing=True,
+
+        # No CPU offloading needed
+        cpu_offload_optimizer=False,
+        cpu_offload_params=False,
+
+        # Standard optimizer
+        use_8bit_optimizer=False,
+
+        # Precision
+        fp16=False,
+        bf16=True,
+        tf32=True,
+
+        # Standard DataLoader settings
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=2,
+
+        # No FSDP for single GPU
+        use_fsdp=False,
+        fsdp_sharding_strategy="FULL_SHARD",
+
+        # Flash Attention for efficiency
+        use_flash_attention_2=True,
+
+        # Slight GQA reduction - 8 KV heads
+        num_key_value_heads=8,
+
+        # Full sequence length
+        max_seq_length=2048,
+
+        mode_description="Medium VRAM Mode (46GB GPU): Balanced performance and memory usage"
+    )
+
+
+def get_high_vram_config() -> MemoryConfig:
+    """
+    Configuration for 80 GB GPU (A100, H100, etc.).
+
+    Optimizations:
+    - Large batch size (16) for maximum GPU throughput
+    - Lower gradient accumulation (8)
+    - Gradient checkpointing disabled for maximum speed
+    - Full attention heads (no GQA reduction)
+    - All performance optimizations enabled
+
+    Expected VRAM usage: ~60-70 GB
+    This leaves headroom for longer sequences or larger batches if needed.
+    """
+    return MemoryConfig(
+        # Large batch size - maximize GPU utilization
+        per_device_train_batch_size=16,
+        per_device_eval_batch_size=16,
+        gradient_accumulation_steps=8,  # Effective batch = 128
+
+        # Disable gradient checkpointing for speed
+        gradient_checkpointing=False,
+
+        # No offloading needed
+        cpu_offload_optimizer=False,
+        cpu_offload_params=False,
+
+        # Standard optimizer
+        use_8bit_optimizer=False,
+
+        # Precision
+        fp16=False,
+        bf16=True,
+        tf32=True,
+
+        # Maximum DataLoader performance
+        dataloader_num_workers=8,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=4,
+
+        # No FSDP for single GPU
+        use_fsdp=False,
+        fsdp_sharding_strategy="FULL_SHARD",
+
+        # Flash Attention for efficiency
+        use_flash_attention_2=True,
+
+        # Full attention heads - no GQA reduction needed
+        num_key_value_heads=16,
+
+        # Full sequence length
+        max_seq_length=2048,
+
+        mode_description="High VRAM Mode (80GB GPU): Maximum throughput, minimal memory optimization"
+    )
+
+
+def get_memory_config(mode: GPUMemoryMode) -> MemoryConfig:
+    """Get memory configuration for the specified GPU mode."""
+    configs = {
+        GPUMemoryMode.LOW_VRAM: get_low_vram_config,
+        GPUMemoryMode.MEDIUM_VRAM: get_medium_vram_config,
+        GPUMemoryMode.HIGH_VRAM: get_high_vram_config,
+    }
+    return configs[mode]()
 
 
 # =============================================================================
@@ -478,6 +734,8 @@ class Config:
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    memory: Optional[MemoryConfig] = None
+    gpu_memory_mode: Optional[GPUMemoryMode] = None
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -492,10 +750,98 @@ class Config:
         # Ensure max_position_embeddings matches max_seq_length
         self.model.max_position_embeddings = self.dataset.max_seq_length
 
+    def apply_memory_mode(self, mode: GPUMemoryMode) -> "Config":
+        """
+        Apply a GPU memory mode to this configuration.
 
-def get_config() -> Config:
-    """Get the default configuration."""
-    return Config()
+        This updates training, model, and dataset configs based on the
+        memory constraints of the specified GPU mode.
+
+        Args:
+            mode: The GPUMemoryMode to apply
+
+        Returns:
+            Self for method chaining
+        """
+        self.gpu_memory_mode = mode
+        self.memory = get_memory_config(mode)
+
+        # Apply to training config
+        self.training.per_device_train_batch_size = self.memory.per_device_train_batch_size
+        self.training.per_device_eval_batch_size = self.memory.per_device_eval_batch_size
+        self.training.gradient_accumulation_steps = self.memory.gradient_accumulation_steps
+        self.training.gradient_checkpointing = self.memory.gradient_checkpointing
+        self.training.fp16 = self.memory.fp16
+        self.training.bf16 = self.memory.bf16
+        self.training.dataloader_num_workers = self.memory.dataloader_num_workers
+        self.training.dataloader_pin_memory = self.memory.dataloader_pin_memory
+
+        # Apply to model config
+        self.model.num_key_value_heads = self.memory.num_key_value_heads
+        self.model.use_flash_attention_2 = self.memory.use_flash_attention_2
+
+        # Apply to dataset config
+        self.dataset.max_seq_length = self.memory.max_seq_length
+        self.dataset.num_workers = self.memory.dataloader_num_workers
+
+        # Keep max_position_embeddings in sync
+        self.model.max_position_embeddings = self.dataset.max_seq_length
+
+        print(f"\n{'='*60}")
+        print(f"GPU MEMORY MODE: {mode.value.upper()}")
+        print(f"{'='*60}")
+        print(f"{self.memory.mode_description}")
+        print(f"\nSettings applied:")
+        print(f"  - Batch size: {self.memory.per_device_train_batch_size}")
+        print(f"  - Gradient accumulation: {self.memory.gradient_accumulation_steps}")
+        print(f"  - Effective batch size: {self.memory.per_device_train_batch_size * self.memory.gradient_accumulation_steps}")
+        print(f"  - Gradient checkpointing: {self.memory.gradient_checkpointing}")
+        print(f"  - CPU offload optimizer: {self.memory.cpu_offload_optimizer}")
+        print(f"  - 8-bit optimizer: {self.memory.use_8bit_optimizer}")
+        print(f"  - KV heads (GQA): {self.memory.num_key_value_heads}")
+        print(f"  - Flash Attention 2: {self.memory.use_flash_attention_2}")
+        print(f"{'='*60}\n")
+
+        return self
+
+
+def get_config(memory_mode: Optional[GPUMemoryMode] = None) -> Config:
+    """
+    Get the configuration with optional memory mode.
+
+    Args:
+        memory_mode: Optional GPUMemoryMode to apply. If None, uses default settings.
+                    Options: GPUMemoryMode.LOW_VRAM (16GB)
+                            GPUMemoryMode.MEDIUM_VRAM (46GB)
+                            GPUMemoryMode.HIGH_VRAM (80GB)
+
+    Returns:
+        Config object with appropriate settings for the hardware
+    """
+    config = Config()
+    if memory_mode is not None:
+        config.apply_memory_mode(memory_mode)
+    return config
+
+
+def get_config_for_vram(vram_gb: int) -> Config:
+    """
+    Automatically select the appropriate memory mode based on available VRAM.
+
+    Args:
+        vram_gb: Available GPU VRAM in gigabytes
+
+    Returns:
+        Config object with appropriate memory mode applied
+    """
+    if vram_gb <= 24:
+        mode = GPUMemoryMode.LOW_VRAM
+    elif vram_gb <= 48:
+        mode = GPUMemoryMode.MEDIUM_VRAM
+    else:
+        mode = GPUMemoryMode.HIGH_VRAM
+
+    return get_config(memory_mode=mode)
 
 
 def print_config(config: Config):
@@ -506,24 +852,106 @@ def print_config(config: Config):
     print("NANO-1B PRETRAINING CONFIGURATION")
     print("=" * 60)
 
+    # Print GPU memory mode if set
+    if config.gpu_memory_mode:
+        print(f"\nGPU Memory Mode: {config.gpu_memory_mode.value.upper()}")
+        if config.memory:
+            print(f"Description: {config.memory.mode_description}")
+
     # Print model size
     num_params = config.model.get_num_parameters()
     print(f"\nModel Parameters: {num_params:,} ({num_params/1e9:.2f}B)")
 
     config_dict = asdict(config)
     for section, values in config_dict.items():
+        if values is None:
+            continue
         print(f"\n[{section.upper()}]")
-        for key, value in values.items():
-            # Truncate long values
-            str_value = str(value)
-            if len(str_value) > 60:
-                str_value = str_value[:57] + "..."
-            print(f"  {key}: {str_value}")
+        if isinstance(values, dict):
+            for key, value in values.items():
+                # Truncate long values
+                str_value = str(value)
+                if len(str_value) > 60:
+                    str_value = str_value[:57] + "..."
+                print(f"  {key}: {str_value}")
 
     print("\n" + "=" * 60)
 
 
+def print_memory_modes_summary():
+    """Print a summary of all available GPU memory modes."""
+    print("=" * 70)
+    print("AVAILABLE GPU MEMORY MODES")
+    print("=" * 70)
+
+    modes = [
+        (GPUMemoryMode.LOW_VRAM, "16 GB GPU + 64 GB RAM"),
+        (GPUMemoryMode.MEDIUM_VRAM, "46 GB GPU (A6000, L40S)"),
+        (GPUMemoryMode.HIGH_VRAM, "80 GB GPU (A100, H100)"),
+    ]
+
+    for mode, hw_desc in modes:
+        mem_config = get_memory_config(mode)
+        effective_batch = mem_config.per_device_train_batch_size * mem_config.gradient_accumulation_steps
+
+        print(f"\n{mode.value.upper()} - {hw_desc}")
+        print("-" * 50)
+        print(f"  Batch size:              {mem_config.per_device_train_batch_size}")
+        print(f"  Gradient accumulation:   {mem_config.gradient_accumulation_steps}")
+        print(f"  Effective batch size:    {effective_batch}")
+        print(f"  Gradient checkpointing:  {mem_config.gradient_checkpointing}")
+        print(f"  CPU offload optimizer:   {mem_config.cpu_offload_optimizer}")
+        print(f"  8-bit optimizer:         {mem_config.use_8bit_optimizer}")
+        print(f"  KV heads (GQA):          {mem_config.num_key_value_heads}")
+        print(f"  Flash Attention 2:       {mem_config.use_flash_attention_2}")
+        print(f"  Max sequence length:     {mem_config.max_seq_length}")
+
+    print("\n" + "=" * 70)
+    print("\nUsage examples:")
+    print("  # Get config for specific mode")
+    print("  config = get_config(memory_mode=GPUMemoryMode.LOW_VRAM)")
+    print("")
+    print("  # Auto-detect based on VRAM")
+    print("  config = get_config_for_vram(16)  # For 16GB GPU")
+    print("")
+    print("  # Apply mode to existing config")
+    print("  config = get_config()")
+    print("  config.apply_memory_mode(GPUMemoryMode.HIGH_VRAM)")
+    print("=" * 70)
+
+
 if __name__ == "__main__":
-    # Print configuration when run directly
-    config = get_config()
-    print_config(config)
+    import sys
+
+    # Check for command line arguments
+    if len(sys.argv) > 1:
+        mode_arg = sys.argv[1].lower()
+        mode_map = {
+            "low": GPUMemoryMode.LOW_VRAM,
+            "low_vram": GPUMemoryMode.LOW_VRAM,
+            "16gb": GPUMemoryMode.LOW_VRAM,
+            "medium": GPUMemoryMode.MEDIUM_VRAM,
+            "medium_vram": GPUMemoryMode.MEDIUM_VRAM,
+            "46gb": GPUMemoryMode.MEDIUM_VRAM,
+            "high": GPUMemoryMode.HIGH_VRAM,
+            "high_vram": GPUMemoryMode.HIGH_VRAM,
+            "80gb": GPUMemoryMode.HIGH_VRAM,
+            "summary": None,  # Special case for summary
+        }
+
+        if mode_arg == "summary":
+            print_memory_modes_summary()
+        elif mode_arg in mode_map:
+            config = get_config(memory_mode=mode_map[mode_arg])
+            print_config(config)
+        else:
+            print(f"Unknown mode: {mode_arg}")
+            print("Available modes: low, medium, high, summary")
+            print("Or VRAM sizes: 16gb, 46gb, 80gb")
+            sys.exit(1)
+    else:
+        # Default: show summary and default config
+        print_memory_modes_summary()
+        print("\n\nDEFAULT CONFIGURATION (no memory mode applied):")
+        config = get_config()
+        print_config(config)

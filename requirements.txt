@@ -28,5 +28,8 @@ pyarrow>=14.0.0
 # Evaluation
 evaluate>=0.4.0
 
+# Memory optimization (required for low VRAM mode)
+bitsandbytes>=0.41.0
+
 # Optional: Flash Attention 2 (uncomment if needed)
 # flash-attn>=2.0.0
